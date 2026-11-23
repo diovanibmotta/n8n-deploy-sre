@@ -1,0 +1,252 @@
+{
+  "id": "ado-ingest",
+  "name": "01 - ADO webhook para fila",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ado-deploy",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-ado",
+      "name": "Webhook ADO",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "ado-deploy-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.headers['x-webhook-token'] === $env.WEBHOOK_TOKEN }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "token-valido",
+      "name": "Token valido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $json.body?.resource || {};\nconst f = res.fields || {};\nconst type = f['System.WorkItemType'];\nconst tags = String(f['System.Tags'] || '').split(';').map(t => t.trim().toLowerCase()).filter(Boolean);\nconst required = String($env.REQUIRED_TAG || 'env:prod').toLowerCase();\nconst wantedType = $env.WORKITEM_TYPE || 'Deploy';\nconst matched = $json.body?.eventType === 'workitem.created' && type === wantedType && tags.includes(required);\nreturn [{ json: { matched, workItemId: res.id, tags, workItemType: type, receivedAt: new Date().toISOString() } }];\n"
+      },
+      "id": "filtrar-tags",
+      "name": "Filtrar tags",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.matched }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "aceito",
+      "name": "Aceito?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "mode": "queue",
+        "queue": "deploy-requests",
+        "sendInputData": false,
+        "message": "={{ JSON.stringify({ workItemId: $json.workItemId, receivedAt: $json.receivedAt }) }}",
+        "options": {
+          "durable": true
+        }
+      },
+      "id": "publicar-na-fila",
+      "name": "Publicar na fila",
+      "type": "n8n-nodes-base.rabbitmq",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        120
+      ],
+      "credentials": {
+        "rabbitmq": {
+          "id": "rabbitmq-local",
+          "name": "RabbitMQ local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'queued', workItemId: $('Filtrar tags').item.json.workItemId } }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "resposta-202",
+      "name": "Resposta 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'ignored' } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "resposta-ignorado",
+      "name": "Resposta ignorado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: 'unauthorized' } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "resposta-401",
+      "name": "Resposta 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook ADO": {
+      "main": [
+        [
+          {
+            "node": "Token valido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token valido?": {
+      "main": [
+        [
+          {
+            "node": "Filtrar tags",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resposta 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar tags": {
+      "main": [
+        [
+          {
+            "node": "Aceito?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aceito?": {
+      "main": [
+        [
+          {
+            "node": "Publicar na fila",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resposta ignorado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publicar na fila": {
+      "main": [
+        [
+          {
+            "node": "Resposta 202",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

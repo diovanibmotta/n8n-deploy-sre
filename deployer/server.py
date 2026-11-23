@@ -6,6 +6,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TARGET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SCRIPT = "/deploy/deploy-ecs.sh"
+
+
+def run(args, target):
+    try:
+        p = subprocess.run(
+            ["bash", SCRIPT, *args],
+            input=target + "\n",
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            env=os.environ,
+        )
+        return p.returncode, p.stdout + p.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "timeout"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -21,18 +37,26 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"status": "ok"})
 
     def do_POST(self):
-        if self.path != "/deploy":
-            return self._send(404, {"error": "not found"})
-        req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-        target, tag, apply = req.get("target"), str(req.get("tag", "")), bool(req.get("apply"))
-        if not TARGET_RE.match(str(target)) or not TAG_RE.match(tag) or tag == "latest":
-            return self._send(400, {"error": "target/tag invalidos"})
-        cmd = ["bash", "/deploy/deploy-ecs.sh", "deploy", target, tag] + (["--apply"] if apply else [])
-        try:
-            p = subprocess.run(cmd, input=target + "\n", capture_output=True, text=True, timeout=1800, env=os.environ)
-            self._send(200, {"exitCode": p.returncode, "output": p.stdout + p.stderr})
-        except subprocess.TimeoutExpired:
-            self._send(200, {"exitCode": 124, "output": "timeout"})
+        length = int(self.headers.get("Content-Length", 0))
+        req = json.loads(self.rfile.read(length) or b"{}")
+        target = str(req.get("target", ""))
+        if not TARGET_RE.match(target):
+            return self._send(400, {"error": "target invalido"})
+
+        if self.path == "/deploy":
+            tag = str(req.get("tag", ""))
+            if not TAG_RE.match(tag) or tag == "latest":
+                return self._send(400, {"error": "tag invalida"})
+            apply = bool(req.get("apply"))
+            code, out = run(["deploy", target, tag] + (["--apply"] if apply else []), target)
+            applied = apply and "update-service enviado" in out
+            return self._send(200, {"exitCode": code, "applied": applied, "output": out})
+
+        if self.path == "/rollback":
+            code, out = run(["rollback", target], target)
+            return self._send(200, {"exitCode": code, "output": out})
+
+        self._send(404, {"error": "not found"})
 
 
 ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()

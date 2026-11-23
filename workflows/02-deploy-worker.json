@@ -1,0 +1,732 @@
+{
+  "id": "deploy-worker",
+  "name": "02 - Worker de deploy (agente IA)",
+  "nodes": [
+    {
+      "parameters": {
+        "queue": "deploy-requests",
+        "options": {
+          "acknowledge": "executionFinishes",
+          "parallelMessages": 1,
+          "durable": true,
+          "jsonParseBody": true,
+          "onlyContent": true
+        }
+      },
+      "id": "fila-deploy-requests",
+      "name": "Fila deploy-requests",
+      "type": "n8n-nodes-base.rabbitmqTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "credentials": {
+        "rabbitmq": {
+          "id": "rabbitmq-local",
+          "name": "RabbitMQ local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "dryRun",
+              "type": "boolean",
+              "value": true
+            },
+            {
+              "id": "2",
+              "name": "sourceState",
+              "type": "string",
+              "value": "New"
+            },
+            {
+              "id": "3",
+              "name": "doneState",
+              "type": "string",
+              "value": "Ready"
+            },
+            {
+              "id": "4",
+              "name": "workItemId",
+              "type": "number",
+              "value": "={{ $json.workItemId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.ADO_ORG_URL }}/{{ encodeURIComponent($env.ADO_PROJECT) }}/_apis/wit/workitems/{{ $json.workItemId }}?api-version=7.1",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+            }
+          ]
+        }
+      },
+      "id": "ler-wi",
+      "name": "Ler WI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.fields['System.State'] === $('Config').first().json.sourceState }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "estado-ok",
+      "name": "Estado ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mapa alvo -> apelidos (edite conforme os alvos de scripts/targets.conf)\nconst allowedTargets = {\n  'app-api': ['app-api', 'api', 'backend'],\n  'app-mcp': ['app-mcp', 'mcp'],\n  'app-data': ['app-data', 'data'],\n};\nconst f = $json.fields;\nconst by = f['System.CreatedBy'] || {};\nreturn [{ json: {\n  id: $json.id,\n  title: f['System.Title'],\n  description: f['System.Description'] || '',\n  tags: f['System.Tags'] || '',\n  requester: { id: by.id, name: by.displayName },\n  allowedTargets,\n} }];\n"
+      },
+      "id": "preparar-dados",
+      "name": "Preparar dados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ JSON.stringify($json) }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Voce e um assistente de SRE que le work items de deploy do Azure DevOps. Identifique QUAL SERVICO sera deployado e QUAL VERSAO (tag da imagem). Receba um JSON com title, description, tags e allowedTargets (mapa alvo -> apelidos). Regras: escolha o alvo SOMENTE dentre as chaves de allowedTargets, casando nome ou apelidos; a versao e a tag nova a ser publicada (nao a versao anterior); nunca invente valores; se uma informacao nao estiver explicita, use null e liste o campo em missing (use 'servico' e/ou 'versao'). Responda apenas no formato estruturado."
+        }
+      },
+      "id": "agente-ia",
+      "name": "Agente IA",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-sonnet-5-5"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "modelo-claude",
+      "name": "Modelo Claude",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        1040,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"target\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"chave de allowedTargets ou null\"\n    },\n    \"service\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"nome do servico como escrito no WI\"\n    },\n    \"version\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"tag da nova versao ou null\"\n    },\n    \"missing\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"notes\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"target\",\n    \"service\",\n    \"version\",\n    \"missing\"\n  ]\n}"
+      },
+      "id": "parser-json",
+      "name": "Parser JSON",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1200,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prep = $('Preparar dados').first().json;\nconst cfg = $('Config').first().json;\nlet o = $input.first().json.output ?? $input.first().json;\nif (typeof o === 'string') { try { o = JSON.parse(o); } catch (e) { o = {}; } }\nconst target = Object.keys(prep.allowedTargets).includes(o.target) ? o.target : null;\nconst version = (typeof o.version === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(o.version) && o.version !== 'latest') ? o.version : null;\nconst missing = [];\nif (!target) missing.push('servico (alvo do deploy)');\nif (!version) missing.push('versao da imagem (tag)');\nreturn [{ json: { ...prep, target, version, missing, complete: missing.length === 0,\n  dryRun: cfg.dryRun, doneState: cfg.doneState, notes: o.notes || '' } }];\n"
+      },
+      "id": "validar-extracao",
+      "name": "Validar extracao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.complete }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "info-completa",
+      "name": "Info completa?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $json;\nconst mention = v.requester?.id ? `<a href=\"#\" data-vss-mention=\"version:2.0,${v.requester.id}\">@${v.requester.name}</a>` : '';\nconst items = v.missing.map(m => `<li>${m}</li>`).join('');\nconst targets = Object.keys(v.allowedTargets).join(', ');\nconst text = `${mention} nao foi possivel iniciar o deploy deste WI. Faltou informar:<ul>${items}</ul>` +\n  `Preencha na descricao <b>Servico</b> (um de: ${targets}) e <b>Versao da imagem</b> (tag) e abra um novo WI de deploy.`;\nreturn [{ json: { id: v.id, text, moveToDone: false } }];\n"
+      },
+      "id": "montar-pedido-info",
+      "name": "Montar pedido info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://deployer:8080/deploy",
+        "options": {
+          "timeout": 1800000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { target: $json.target, tag: $json.version, apply: !$json.dryRun } }}"
+      },
+      "id": "deploy-ecs",
+      "name": "Deploy ECS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        200
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.exitCode === 0 && !$json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "deploy-ok",
+      "name": "Deploy ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validar extracao').first().json;\nconst r = $('Deploy ECS').first().json;\nconst when = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });\nconst tail = String(r.output || '').trim().split('\\n').slice(-25).join('\\n');\nconst text = v.dryRun\n  ? `<b>Dry-run OK (nada aplicado)</b><br>Alvo: ${v.target}, tag ${v.version}, ${when} (BRT)<pre>${tail}</pre>`\n  : `<b>Deploy em producao concluido</b><br>Alvo: ${v.target}<br>Tag: ${v.version}<br>Horario: ${when} (BRT)<br>Executado via n8n.<pre>${tail}</pre>`;\nreturn [{ json: { id: v.id, text, moveToDone: !v.dryRun, doneState: v.doneState } }];\n"
+      },
+      "id": "montar-comentario-ok",
+      "name": "Montar comentario ok",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.applied === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "rollback-necessario",
+      "name": "Rollback necessario?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://deployer:8080/rollback",
+        "options": {
+          "timeout": 1800000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { target: $('Validar extracao').first().json.target } }}"
+      },
+      "id": "rollback",
+      "name": "Rollback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        260
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validar extracao').first().json;\nconst r = $('Deploy ECS').first().json;\nlet rb = null;\ntry { rb = $('Rollback').first().json; } catch (e) { rb = null; }\nconst when = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });\nconst tail = (s) => String(s || '').trim().split('\\n').slice(-20).join('\\n');\nlet rbText = '';\nif (rb) {\n  const rbOk = rb.exitCode === 0 && !rb.error;\n  rbText = rbOk\n    ? '<br><b>Rollback executado:</b> imagem anterior restaurada.'\n    : '<br><b>Rollback FALHOU, intervencao manual necessaria.</b>';\n  rbText += `<pre>${tail(rb.output || JSON.stringify(rb.error || ''))}</pre>`;\n}\nconst text = `<b>Deploy FALHOU</b><br>Alvo: ${v.target}, tag ${v.version}, ${when} (BRT). WI mantido no estado atual.` +\n  `<pre>${tail(r.output || JSON.stringify(r.error || ''))}</pre>${rbText}`;\nreturn [{ json: { id: v.id, text, moveToDone: false } }];\n"
+      },
+      "id": "montar-comentario-falha",
+      "name": "Montar comentario falha",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ADO_ORG_URL }}/{{ encodeURIComponent($env.ADO_PROJECT) }}/_apis/wit/workItems/{{ $json.id }}/comments?api-version=7.1-preview.4",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { text: $json.text } }}"
+      },
+      "id": "comentar-wi",
+      "name": "Comentar WI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $('Montar comentario ok').isExecuted && $('Montar comentario ok').first().json.moveToDone === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "mover",
+      "name": "Mover?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3080,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.ADO_ORG_URL }}/{{ encodeURIComponent($env.ADO_PROJECT) }}/_apis/wit/workitems/{{ $('Montar comentario ok').first().json.id }}?api-version=7.1",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json-patch+json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ [{ op: 'add', path: '/fields/System.State', value: $('Montar comentario ok').first().json.doneState }] }}"
+      },
+      "id": "mover-para-ready",
+      "name": "Mover para Ready",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3300,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Fila deploy-requests": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Ler WI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler WI": {
+      "main": [
+        [
+          {
+            "node": "Estado ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Estado ok?": {
+      "main": [
+        [
+          {
+            "node": "Preparar dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar dados": {
+      "main": [
+        [
+          {
+            "node": "Agente IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Modelo Claude": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente IA",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser JSON": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Agente IA",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente IA": {
+      "main": [
+        [
+          {
+            "node": "Validar extracao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar extracao": {
+      "main": [
+        [
+          {
+            "node": "Info completa?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Info completa?": {
+      "main": [
+        [
+          {
+            "node": "Deploy ECS",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Montar pedido info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar pedido info": {
+      "main": [
+        [
+          {
+            "node": "Comentar WI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deploy ECS": {
+      "main": [
+        [
+          {
+            "node": "Deploy ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deploy ok?": {
+      "main": [
+        [
+          {
+            "node": "Montar comentario ok",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rollback necessario?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rollback necessario?": {
+      "main": [
+        [
+          {
+            "node": "Rollback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Montar comentario falha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rollback": {
+      "main": [
+        [
+          {
+            "node": "Montar comentario falha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar comentario ok": {
+      "main": [
+        [
+          {
+            "node": "Comentar WI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar comentario falha": {
+      "main": [
+        [
+          {
+            "node": "Comentar WI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comentar WI": {
+      "main": [
+        [
+          {
+            "node": "Mover?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mover?": {
+      "main": [
+        [
+          {
+            "node": "Mover para Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

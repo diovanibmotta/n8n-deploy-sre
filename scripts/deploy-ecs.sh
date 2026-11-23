@@ -158,6 +158,7 @@ cmd_deploy() {
   if [[ "$apply" -eq 1 ]]; then
     read -r -p "Confirma deploy ($TARGET -> $tag)? Digite o nome do alvo: " ans
     [[ "$ans" == "$TARGET" ]] || die "cancelado"
+    mkdir -p "$STATE_DIR"; rm -f "$STATE_DIR/$CLUSTER".*.previous
   fi
   for svc in $SERVICES; do deploy_service "$svc" "$tag" "$apply"; done
   if [[ "$apply" -eq 1 ]]; then wait_stable; fi
@@ -168,13 +169,16 @@ cmd_rollback() {
   load_target "${1:-}"; need aws; check_account AWS_D "$ACCOUNT"
   read -r -p "Rollback de $TARGET para a revisao anterior? Digite o nome do alvo: " ans
   [[ "$ans" == "$TARGET" ]] || die "cancelado"
+  local rolled=0
   for svc in $SERVICES; do
     local f="$STATE_DIR/$CLUSTER.$svc.previous"
-    [[ -f "$f" ]] || die "[$svc] sem estado anterior em $f"
+    [[ -f "$f" ]] || { log "[$svc] sem estado anterior, nao alterado"; continue; }
     "${AWS_D[@]}" ecs update-service --cluster "$CLUSTER" --service "$svc" \
       --task-definition "$(cat "$f")" --force-new-deployment >/dev/null
     log "[$svc] rollback para $(cat "$f")"
+    rolled=$((rolled + 1))
   done
+  [[ "$rolled" -gt 0 ]] || die "nenhum service com estado anterior para reverter"
   wait_stable
 }
 

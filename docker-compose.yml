@@ -9,15 +9,31 @@ services:
       - TZ=America/Sao_Paulo
       - N8N_SECURE_COOKIE=false
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - WEBHOOK_URL=${PUBLIC_URL:-http://localhost:5678/}
+      - WEBHOOK_TOKEN=${WEBHOOK_TOKEN}
+      - REQUIRED_TAG=${REQUIRED_TAG:-env:prod}
+      - WORKITEM_TYPE=${WORKITEM_TYPE:-Deploy}
       - ADO_PAT=${ADO_PAT}
       - ADO_ORG_URL=${ADO_ORG_URL}
       - ADO_PROJECT=${ADO_PROJECT}
-      - ADO_AREA_PATH=${ADO_AREA_PATH}
     volumes:
       - n8n_data:/home/node/.n8n
       - ./workflows:/workflows:ro
+      - ./credentials:/credentials:ro
     depends_on:
+      - rabbitmq
       - deployer
+
+  rabbitmq:
+    image: rabbitmq:3-alpine
+    container_name: n8n-rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=n8n
+      - RABBITMQ_DEFAULT_PASS=n8n-local-only
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./rabbitmq/20-definitions.conf:/etc/rabbitmq/conf.d/20-definitions.conf:ro
 
   deployer:
     build: ./deployer
@@ -34,4 +50,5 @@ services:
 
 volumes:
   n8n_data:
+  rabbitmq_data:
   deploy_state:
