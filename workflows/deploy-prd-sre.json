@@ -1,0 +1,391 @@
+{
+  "name": "Deploy PRD via Azure DevOps (demo)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "dryRun",
+              "type": "boolean",
+              "value": true
+            },
+            {
+              "id": "2",
+              "name": "sourceState",
+              "type": "string",
+              "value": "New"
+            },
+            {
+              "id": "3",
+              "name": "doneState",
+              "type": "string",
+              "value": "Ready"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ADO_ORG_URL }}/{{ encodeURIComponent($env.ADO_PROJECT) }}/_apis/wit/wiql?api-version=7.1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { query: \"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '\" + $env.ADO_PROJECT + \"' AND [System.WorkItemType] = 'Deploy' AND [System.AreaPath] UNDER '\" + $env.ADO_AREA_PATH + \"' AND [System.Tags] CONTAINS 'env:prod' AND [System.State] = '\" + $json.sourceState + \"' ORDER BY [System.CreatedDate] ASC\" } }}"
+      },
+      "id": "buscar-wis-deploy",
+      "name": "Buscar WIs Deploy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "workItems",
+        "options": {}
+      },
+      "id": "split",
+      "name": "Split WIs",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.ADO_ORG_URL }}/{{ encodeURIComponent($env.ADO_PROJECT) }}/_apis/wit/workitems/{{ $json.id }}?api-version=7.1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ler-wi",
+      "name": "Ler WI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst cfg = $('Config').first().json;\nconst out = [];\nconst MAP = {\n  'app-api': 'app-api',\n  'app-mcp': 'app-mcp',\n  'app-data': 'app-data',\n};\nfor (const it of $input.all()) {\n  const wi = it.json;\n  const desc = wi.fields['System.Description'] || '';\n  const svc = (desc.match(/\\*\\*Servi[^*]*\\*\\*:\\s*(\\S+)/) || [])[1];\n  const tag = (desc.match(/\\*\\*Vers[^*]*imagem\\*\\*:\\s*(\\S+)/) || [])[1];\n  const target = MAP[svc];\n  if (!target || !tag || tag === 'latest') continue;\n  out.push({ json: {\n    id: wi.id, title: wi.fields['System.Title'], service: svc, target, tag,\n    dryRun: cfg.dryRun, doneState: cfg.doneState,\n    body: { target, tag, apply: !cfg.dryRun },\n  }});\n}\nreturn out;\n"
+      },
+      "id": "parse",
+      "name": "Filtrar servicos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://deployer:8080/deploy",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 1800000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}"
+      },
+      "id": "deploy-ecs",
+      "name": "Deploy ECS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst out = [];\nconst src = $('Filtrar servicos').all();\n$input.all().forEach((it, i) => {\n  const w = src[i].json;\n  const r = it.json;\n  const ok = r.exitCode === 0 && !r.error;\n  const tail = ((r.output || '') + '\\n' + (r.error ? JSON.stringify(r.error) : '')).trim().split('\\n').slice(-25).join('\\n');\n  const when = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });\n  let text;\n  if (ok && !w.dryRun) text = `<b>Deploy em producao concluido</b><br>Service: ${w.service} (alvo ${w.target})<br>Tag: ${w.tag}<br>Horario: ${when} (BRT)<br>Executado via n8n.<pre>${tail}</pre>`;\n  else if (ok) text = `<b>Dry-run OK (nada aplicado)</b><br>Service: ${w.service}, tag ${w.tag}, ${when} (BRT)<pre>${tail}</pre>`;\n  else text = `<b>Deploy FALHOU</b><br>Service: ${w.service}, tag ${w.tag}, ${when} (BRT). WI mantido no estado atual.<pre>${tail}</pre>`;\n  out.push({ json: { ...w, ok, moveToDone: ok && !w.dryRun, text } });\n});\nreturn out;\n"
+      },
+      "id": "result",
+      "name": "Montar comentario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ADO_ORG_URL }}/{{ encodeURIComponent($env.ADO_PROJECT) }}/_apis/wit/workItems/{{ $json.id }}/comments?api-version=7.1-preview.4",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { text: $json.text } }}"
+      },
+      "id": "comentar-wi",
+      "name": "Comentar WI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $('Montar comentario').item.json.moveToDone }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if",
+      "name": "Mover?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.ADO_ORG_URL }}/{{ encodeURIComponent($env.ADO_PROJECT) }}/_apis/wit/workitems/{{ $('Montar comentario').item.json.id }}?api-version=7.1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json-patch+json"
+            }
+          ]
+        },
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ [{ op: 'add', path: '/fields/System.State', value: $('Montar comentario').item.json.doneState }] }}"
+      },
+      "id": "mover-para-ready",
+      "name": "Mover para Ready",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Buscar WIs Deploy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar WIs Deploy": {
+      "main": [
+        [
+          {
+            "node": "Split WIs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split WIs": {
+      "main": [
+        [
+          {
+            "node": "Ler WI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler WI": {
+      "main": [
+        [
+          {
+            "node": "Filtrar servicos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar servicos": {
+      "main": [
+        [
+          {
+            "node": "Deploy ECS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deploy ECS": {
+      "main": [
+        [
+          {
+            "node": "Montar comentario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar comentario": {
+      "main": [
+        [
+          {
+            "node": "Comentar WI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Comentar WI": {
+      "main": [
+        [
+          {
+            "node": "Mover?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mover?": {
+      "main": [
+        [
+          {
+            "node": "Mover para Ready",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

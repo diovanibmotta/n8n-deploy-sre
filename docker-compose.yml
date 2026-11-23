@@ -1,0 +1,37 @@
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n-deploy-demo
+    ports:
+      - "5678:5678"
+    environment:
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+      - TZ=America/Sao_Paulo
+      - N8N_SECURE_COOKIE=false
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - ADO_PAT=${ADO_PAT}
+      - ADO_ORG_URL=${ADO_ORG_URL}
+      - ADO_PROJECT=${ADO_PROJECT}
+      - ADO_AREA_PATH=${ADO_AREA_PATH}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows:ro
+    depends_on:
+      - deployer
+
+  deployer:
+    build: ./deployer
+    container_name: n8n-deployer
+    environment:
+      - DEPLOY_CONFIG=/deploy/targets.conf
+      - STATE_DIR=/state
+      - HOME=/home/node
+    volumes:
+      - deploy_state:/state
+      - ${AWS_DIR}:/home/node/.aws
+      - ./scripts/deploy-ecs.sh:/deploy/deploy-ecs.sh:ro
+      - ./targets.conf:/deploy/targets.conf:ro
+
+volumes:
+  n8n_data:
+  deploy_state:
