@@ -95,31 +95,12 @@
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "typeValidation": "loose"
-          },
-          "conditions": [
-            {
-              "id": "c1",
-              "leftValue": "={{ $json.fields['System.State'] === $('Config').first().json.sourceState }}",
-              "rightValue": "",
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
+        "jsCode": "// Descarta (sem erro) o que nao for um WI de deploy valido: tipo, estado, area e iteration.\nconst f = $json.fields || {};\nconst cfg = $('Config').first().json;\nconst underPath = (value, prefix) => {\n  const p = String(prefix || '').trim().toLowerCase();\n  if (!p) return true;\n  const v = String(value || '').toLowerCase();\n  return v === p || v.startsWith(p + '\\\\');\n};\nconst ok = f['System.WorkItemType'] === ($env.WORKITEM_TYPE || 'Deploy')\n  && f['System.State'] === cfg.sourceState\n  && underPath(f['System.AreaPath'], $env.AREA_PATH_PREFIX)\n  && underPath(f['System.IterationPath'], $env.ITERATION_PATH_PREFIX);\nreturn ok ? [$input.first()] : [];\n"
       },
-      "id": "estado-ok",
-      "name": "Estado ok?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
+      "id": "wi-valido",
+      "name": "WI valido?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         660,
         300
@@ -525,14 +506,14 @@
       "main": [
         [
           {
-            "node": "Estado ok?",
+            "node": "WI valido?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Estado ok?": {
+    "WI valido?": {
       "main": [
         [
           {

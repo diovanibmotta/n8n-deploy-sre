@@ -53,7 +53,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const res = $json.body?.resource || {};\nconst f = res.fields || {};\nconst type = f['System.WorkItemType'];\nconst tags = String(f['System.Tags'] || '').split(';').map(t => t.trim().toLowerCase()).filter(Boolean);\nconst required = String($env.REQUIRED_TAG || 'env:prod').toLowerCase();\nconst wantedType = $env.WORKITEM_TYPE || 'Deploy';\nconst matched = $json.body?.eventType === 'workitem.created' && type === wantedType && tags.includes(required);\nreturn [{ json: { matched, workItemId: res.id, tags, workItemType: type, receivedAt: new Date().toISOString() } }];\n"
+        "jsCode": "const res = $json.body?.resource || {};\nconst f = res.fields || {};\nconst type = f['System.WorkItemType'];\nconst tags = String(f['System.Tags'] || '').split(';').map(t => t.trim().toLowerCase()).filter(Boolean);\nconst required = String($env.REQUIRED_TAG || 'env:prod').toLowerCase();\nconst wantedType = $env.WORKITEM_TYPE || 'Deploy';\nconst underPath = (value, prefix) => {\n  const p = String(prefix || '').trim().toLowerCase();\n  if (!p) return true;\n  const v = String(value || '').toLowerCase();\n  return v === p || v.startsWith(p + '\\\\');\n};\nlet reason = '';\nif ($json.body?.eventType !== 'workitem.created') reason = 'evento';\nelse if (type !== wantedType) reason = 'tipo';\nelse if (!tags.includes(required)) reason = 'tag';\nelse if (!underPath(f['System.AreaPath'], $env.AREA_PATH_PREFIX)) reason = 'area';\nelse if (!underPath(f['System.IterationPath'], $env.ITERATION_PATH_PREFIX)) reason = 'iteration';\nreturn [{ json: { matched: reason === '', reason, workItemId: res.id, tags, workItemType: type, receivedAt: new Date().toISOString() } }];\n"
       },
       "id": "filtrar-tags",
       "name": "Filtrar tags",
@@ -142,7 +142,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { status: 'ignored' } }}",
+        "responseBody": "={{ { status: 'ignored', reason: $json.reason } }}",
         "options": {
           "responseCode": 200
         }

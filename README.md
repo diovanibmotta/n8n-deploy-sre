@@ -29,21 +29,30 @@ flowchart LR
 flowchart TD
   A[Webhook ADO] --> B{Token válido?}
   B -- não --> R1[401]
-  B -- sim --> C["Filtrar tags<br/>evento workitem.created, tipo Deploy, tag env:prod"]
+  B -- sim --> C["Filtrar<br/>evento workitem.created, tipo Deploy, tag env:prod, área e iteration"]
   C --> D{Aceito?}
-  D -- não --> R2[200 ignored]
+  D -- não --> R2["200 ignored (reason)"]
   D -- sim --> E[Publica workItemId na fila] --> R3[202 queued]
 ```
 
-Tipo do WI e tag obrigatória são configuráveis por `WORKITEM_TYPE` e `REQUIRED_TAG`.
+Filtros configuráveis por variável de ambiente (vazio = não filtra):
+
+| Variável | Padrão | Efeito |
+|---|---|---|
+| `WORKITEM_TYPE` | `Deploy` | Tipo do work item aceito |
+| `REQUIRED_TAG` | `env:prod` | Tag obrigatória |
+| `AREA_PATH_PREFIX` | vazio | Area path deve ser igual ao prefixo ou estar abaixo dele (`Projeto\Area` aceita `Projeto\Area\Sub`, rejeita `Projeto\AreaX`) |
+| `ITERATION_PATH_PREFIX` | vazio | Mesma regra para o Iteration path |
+
+Quando o evento é descartado, a resposta traz o motivo: `{"status":"ignored","reason":"area"}` (`evento`, `tipo`, `tag`, `area` ou `iteration`). O worker repete a checagem de tipo, estado, área e iteration depois de ler o WI, como defesa caso o hook esteja mal configurado.
 
 ## Workflow 02: worker (agente de IA + deploy + rollback)
 
 ```mermaid
 flowchart TD
   Q[[Fila deploy-requests<br/>1 mensagem por vez]] --> L[Ler WI no ADO]
-  L --> S{Estado = New?}
-  S -- não --> X[Descarta]
+  L --> S{"WI válido?<br/>tipo, estado New, área, iteration"}
+  S -- não --> X[Descarta sem comentar]
   S -- sim --> AG["Agente IA (modelo via AI Gateway)<br/>identifica serviço e versão"]
   AG --> V["Validar extração<br/>alvo na allowlist, tag válida, sem latest"]
   V --> C{Informação completa?}
