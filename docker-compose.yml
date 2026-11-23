@@ -13,6 +13,7 @@ services:
       - WEBHOOK_TOKEN=${WEBHOOK_TOKEN}
       - REQUIRED_TAG=${REQUIRED_TAG:-env:prod}
       - WORKITEM_TYPE=${WORKITEM_TYPE:-Deploy}
+      - LLM_MODEL=${LLM_MODEL}
       - ADO_PAT=${ADO_PAT}
       - ADO_ORG_URL=${ADO_ORG_URL}
       - ADO_PROJECT=${ADO_PROJECT}

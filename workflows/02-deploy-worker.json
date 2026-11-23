@@ -161,20 +161,25 @@
         "model": {
           "__rl": true,
           "mode": "id",
-          "value": "claude-sonnet-5-5"
+          "value": "={{ $env.LLM_MODEL }}"
         },
-        "options": {
-          "temperature": 0
-        }
+        "responsesApiEnabled": false,
+        "options": {}
       },
-      "id": "modelo-claude",
-      "name": "Modelo Claude",
-      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "id": "modelo-llm",
+      "name": "Modelo LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
       "typeVersion": 1.3,
       "position": [
         1040,
         520
-      ]
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "llm-gateway",
+          "name": "AI Gateway"
+        }
+      }
     },
     {
       "parameters": {
@@ -549,7 +554,7 @@
         ]
       ]
     },
-    "Modelo Claude": {
+    "Modelo LLM": {
       "ai_languageModel": [
         [
           {

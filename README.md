@@ -18,7 +18,7 @@ flowchart LR
   end
 
   N8N -- "ler WI, comentar, mover estado (PAT)" --> ADO2[(Azure DevOps<br/>REST API)]
-  N8N -- "extração serviço/versão" --> LLM[Claude<br/>Anthropic API]
+  N8N -- "extração serviço/versão" --> LLM[AI Gateway<br/>LiteLLM, API OpenAI-compatível]
   DEP -- "SSO profile (~/.aws)" --> ECS[AWS ECS<br/>register-task-definition + update-service]
   DEP -. valida tag .-> ECR[(ECR)]
 ```
@@ -44,7 +44,7 @@ flowchart TD
   Q[[Fila deploy-requests<br/>1 mensagem por vez]] --> L[Ler WI no ADO]
   L --> S{Estado = New?}
   S -- não --> X[Descarta]
-  S -- sim --> AG["Agente IA (Claude)<br/>identifica serviço e versão"]
+  S -- sim --> AG["Agente IA (modelo via AI Gateway)<br/>identifica serviço e versão"]
   AG --> V["Validar extração<br/>alvo na allowlist, tag válida, sem latest"]
   V --> C{Informação completa?}
   C -- não --> M["Comenta mencionando o solicitante<br/>listando o que faltou"]
@@ -58,7 +58,7 @@ flowchart TD
   RB -.-> F
 ```
 
-- O agente devolve JSON estruturado (`target`, `service`, `version`, `missing`). O código valida o resultado independentemente do LLM: o alvo precisa estar na allowlist do nó **Preparar dados**, a tag precisa casar com `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` e `latest` é rejeitado. O deployer valida de novo.
+- O agente (nó AI Agent com Structured Output Parser) devolve JSON estruturado (`target`, `service`, `version`, `missing`). O código valida o resultado independentemente do LLM: o alvo precisa estar na allowlist do nó **Preparar dados**, a tag precisa casar com `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` e `latest` é rejeitado. O deployer valida de novo.
 - Se faltar serviço ou versão, o WI recebe um comentário com menção ao solicitante (`System.CreatedBy`) e nada é executado.
 - Rollback: o `deploy-ecs.sh` guarda a task definition anterior de cada service atualizado; em falha (inclusive timeout de estabilização) o worker chama `/rollback`. Estado antigo é limpo a cada `--apply`, e serviços ainda não tocados são ignorados no rollback.
 - Mensagens são consumidas uma por vez (`parallelMessages=1`), então dois deploys nunca rodam em paralelo.
@@ -71,13 +71,15 @@ cp scripts/targets.example.conf targets.conf      # contas, clusters e services
 aws sso login --profile prod
 docker compose up -d --build
 
+cp credentials/llm-gateway.example.json credentials/llm-gateway.json   # preencha apiKey (virtual key) e url do gateway
 docker exec n8n-deploy-demo n8n import:credentials --input=/credentials/rabbitmq.json
+docker exec n8n-deploy-demo n8n import:credentials --input=/credentials/llm-gateway.json
 docker exec n8n-deploy-demo n8n import:workflow --separate --input=/workflows
 ```
 
 1. Abra http://localhost:5678 e crie o usuário owner.
-2. No workflow **02**, crie a credencial **Anthropic** e selecione-a no nó **Modelo Claude**.
-3. Publique os dois workflows (botão Publish).
+2. O modelo do agente é o nó **Modelo LLM** (credencial `AI Gateway`, modelo em `LLM_MODEL`). Use um modelo que a sua chave enxergue no gateway (`GET /v1/models`); alguns modelos rejeitam `temperature`, por isso o parâmetro não é enviado.
+3. Publique os dois workflows (botão Publish ou `n8n publish:workflow --id=<id>`).
 4. No Azure DevOps: Project Settings, Service hooks, Web Hooks, evento **Work item created**, URL `https://<host-público>/webhook/ado-deploy` e header `X-Webhook-Token: <WEBHOOK_TOKEN>`. Para teste local, exponha a porta 5678 com um túnel e defina `PUBLIC_URL`.
 5. O WI precisa ter a tag `env:prod` e, na descrição, o serviço e a versão a publicar.
 
@@ -107,6 +109,7 @@ Notas de segurança:
 | `scripts/targets.example.conf` | Exemplo de alvos (conta, região, cluster, services) |
 | `rabbitmq/` | Definição da fila, usuário e vhost |
 | `credentials/rabbitmq.json` | Credencial local do RabbitMQ para `import:credentials` |
+| `credentials/llm-gateway.example.json` | Modelo da credencial do AI Gateway (o arquivo real `llm-gateway.json` fica fora do git) |
 
 ## Releases
 
