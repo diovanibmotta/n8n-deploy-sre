@@ -79,7 +79,7 @@
           "parameters": [
             {
               "name": "Authorization",
-              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+              "value": "={{ 'Basic ' + (':' + $env.ADO_PAT).base64Encode() }}"
             }
           ]
         }
@@ -413,7 +413,7 @@
           "parameters": [
             {
               "name": "Authorization",
-              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+              "value": "={{ 'Basic ' + (':' + $env.ADO_PAT).base64Encode() }}"
             },
             {
               "name": "Content-Type",
@@ -476,7 +476,7 @@
           "parameters": [
             {
               "name": "Authorization",
-              "value": "={{ 'Basic ' + Buffer.from(':' + $env.ADO_PAT).toString('base64') }}"
+              "value": "={{ 'Basic ' + (':' + $env.ADO_PAT).base64Encode() }}"
             },
             {
               "name": "Content-Type",
